@@ -10,6 +10,7 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import * as XLSX from 'xlsx';
 import './styles.css';
+import { FaSun, FaMoon } from 'react-icons/fa';
 
 const periodOptions = [
   { label: 'Daily', days: 1 },
@@ -19,6 +20,27 @@ const periodOptions = [
 ];
 
 const lineStyles = ['0', '5 5', '10 5', '5 10']; // Solid, dashed, dotted, etc.
+
+const currencySymbols = {
+  INR: '₹',
+  USD: '$',
+  EUR: '€'
+};
+
+const CustomTooltip = ({ active, payload, principal, periodDays, contribution, currency }) => {
+  if (active && payload && payload.length) {
+    const { day, amount } = payload[0].payload;
+    const interest = amount - (Number(principal) + (day / periodDays) * Number(contribution));
+    return (
+      <div className="bg-white p-2 rounded shadow text-xs">
+        <div><strong>Day:</strong> {day}</div>
+        <div><strong>Amount:</strong> {currency} {amount.toFixed(2)}</div>
+        <div><strong>Interest:</strong> {currency} {interest.toFixed(2)}</div>
+      </div>
+    );
+  }
+  return null;
+};
 
 const CompoundInterestCalculator = () => {
   const [principal, setPrincipal] = useState(1000);
@@ -40,7 +62,16 @@ const CompoundInterestCalculator = () => {
   const [userRate, setUserRate] = useState('');
   const [userDays, setUserDays] = useState('');
   const [userColor, setUserColor] = useState('#000000'); // Default color for the user scenario
+  const [interestEarned, setInterestEarned] = useState(0);
+  const [inputError, setInputError] = useState('');
   const chartRef = useRef(null);
+  const [doubleDay, setDoubleDay] = useState(null);
+  const [showGoal, setShowGoal] = useState(false);
+  const [reverseMode, setReverseMode] = useState(false);
+  const [requiredRate, setRequiredRate] = useState('');
+  const [requiredPrincipal, setRequiredPrincipal] = useState('');
+  const [inflation, setInflation] = useState(0);
+  const [realFinalAmount, setRealFinalAmount] = useState(0);
 
   useEffect(() => {
     const saved = localStorage.getItem('compoundData');
@@ -67,17 +98,25 @@ const CompoundInterestCalculator = () => {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  
+  useEffect(() => {
+    calculate();
+    // eslint-disable-next-line
+  }, [principal, rate, days, periodDays, contribution, target]);
+
   const calculate = () => {
     // Validate inputs
     if (!principal || !rate || !days || !periodDays) {
-      alert("Please fill in all required fields.");
+      setInputError("Please fill in all required fields.");
       return;
     }
 
     if (periodDays <= 0) {
-      alert("Invalid period selected. Please select a valid period.");
+      setInputError("Invalid period selected. Please select a valid period.");
       return;
     }
+
+    setInputError(''); // Clear any previous errors
 
     const newData = [];
     let amt = Number(principal); // Starting principal amount
@@ -104,7 +143,27 @@ const CompoundInterestCalculator = () => {
     setData(newData); // Update the graph data
     setFinalAmount(newData[newData.length - 1]?.amount || 0); // Update the final amount
     setCurrentStep(targetDay); // Update the day when the target is hit
+
+    if (targetDay !== null && !showGoal) {
+      setShowGoal(true);
+      setTimeout(() => setShowGoal(false), 3000); // Hide after 3 seconds
+    }
+
+    const totalContributions = Number(principal) + steps * Number(contribution);
+    const interestEarned = (newData[newData.length - 1]?.amount || 0) - totalContributions;
+    setInterestEarned(interestEarned);
   };
+
+  useEffect(() => {
+    if (principal > 0 && rate > 0) {
+      // Rule of 72: 72 / rate = years to double
+      const yearsToDouble = 72 / Number(rate);
+      const daysToDouble = Math.round(yearsToDouble * 365);
+      setDoubleDay(daysToDouble);
+    } else {
+      setDoubleDay(null);
+    }
+  }, [principal, rate]);
 
   const calculateScenario = (scenario) => {
     const newData = [];
@@ -162,6 +221,16 @@ const CompoundInterestCalculator = () => {
     XLSX.writeFile(workbook, 'compound_interest.xlsx');
   };
 
+  const downloadChartImage = () => {
+    if (!chartRef.current) return;
+    html2canvas(chartRef.current).then(canvas => {
+      const link = document.createElement('a');
+      link.download = 'compound_interest_chart.png';
+      link.href = canvas.toDataURL();
+      link.click();
+    });
+  };
+
   const resetAll = () => {
     setPrincipal(1000); // Reset to default value
     setRate(5); // Reset to default value
@@ -177,7 +246,16 @@ const CompoundInterestCalculator = () => {
       <LineChart>
         <XAxis dataKey="day" />
         <YAxis />
-        <Tooltip />
+        <Tooltip
+          content={
+            <CustomTooltip
+              principal={principal}
+              periodDays={periodDays}
+              contribution={contribution}
+              currency={currency}
+            />
+          }
+        />
         <CartesianGrid stroke="#ccc" />
 
         {/* Line Graph */}
@@ -186,13 +264,41 @@ const CompoundInterestCalculator = () => {
             type="monotone"
             dataKey="amount"
             data={data}
-            stroke="blue" // Line graph in blue
+            stroke="blue"
             strokeWidth={2}
+            isAnimationActive={true}
           />
         )}
       </LineChart>
     );
   };
+
+  const handleReverseCalculation = () => {
+    // Calculate required rate if principal is given
+    if (principal && target && days && periodDays) {
+      const n = Math.floor(Number(days) / periodDays);
+      const reqRate = Math.pow(Number(target) / Number(principal), 1 / n) - 1;
+      setRequiredRate((reqRate * 100).toFixed(2));
+      setRequiredPrincipal('');
+    }
+    // Calculate required principal if rate is given
+    else if (rate && target && days && periodDays) {
+      const n = Math.floor(Number(days) / periodDays);
+      const reqPrincipal = Number(target) / Math.pow(1 + Number(rate) / 100, n);
+      setRequiredPrincipal(reqPrincipal.toFixed(2));
+      setRequiredRate('');
+    }
+  };
+
+  useEffect(() => {
+    if (finalAmount && inflation && days) {
+      const years = Number(days) / 365;
+      const realAmount = finalAmount / Math.pow(1 + inflation / 100, years);
+      setRealFinalAmount(realAmount);
+    } else {
+      setRealFinalAmount(finalAmount);
+    }
+  }, [finalAmount, inflation, days]);
 
   return (
     <div className={`w-full max-w-4xl mx-auto p-4 sm:p-6 rounded-2xl bg-gradient-to-br ${theme === 'dark' ? 'from-gray-900 to-gray-800' : 'from-purple-600 to-blue-500'} shadow-lg`}>
@@ -203,9 +309,10 @@ const CompoundInterestCalculator = () => {
         </h1>
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          className="mt-4 sm:mt-0 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white rounded-lg shadow-md hover:bg-gray-300 dark:hover:bg-gray-600"
+          className="mt-4 sm:mt-0 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white rounded-lg shadow-md hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center gap-2"
+          aria-label="Toggle theme"
         >
-          Toggle {theme === 'dark' ? 'Light' : 'Dark'} Mode
+          {theme === 'dark' ? <FaSun /> : <FaMoon />}
         </button>
       </div>
 
@@ -213,66 +320,114 @@ const CompoundInterestCalculator = () => {
       <div className="bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-2xl shadow-md">
         <h2 className="text-2xl font-semibold text-gray-800 dark:text-white mb-4 text-center sm:text-left">Input Parameters</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <input
-            type="number"
-            value={principal}
-            onChange={(e) => setPrincipal(e.target.value)}
-            placeholder="Principal"
-            className="p-3 border rounded-lg bg-indigo-50 dark:bg-indigo-900 text-gray-800 dark:text-white"
-          />
-          <input
-            type="number"
-            value={rate}
-            onChange={(e) => setRate(e.target.value)}
-            placeholder="Rate (%)"
-            className="p-3 border rounded-lg bg-green-50 dark:bg-green-900 text-gray-800 dark:text-white"
-          />
-          <input
-            type="number"
-            value={days}
-            onChange={(e) => setDays(e.target.value)}
-            placeholder="Total Days"
-            className="p-3 border rounded-lg bg-yellow-50 dark:bg-yellow-900 text-gray-800 dark:text-white"
-          />
-          <select
-            value={periodDays}
-            onChange={(e) => {
-              const selectedPeriod = Number(e.target.value);
-              setPeriodDays(selectedPeriod);
-              console.log("Updated Period Days:", selectedPeriod); // Debugging
-            }}
-            className="p-3 border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-white"
-          >
-            {periodOptions.map((o) => (
-              <option key={o.days} value={o.days}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <input
-            type="number"
-            value={contribution}
-            onChange={(e) => setContribution(e.target.value)}
-            placeholder="Contribution per period"
-            className="p-3 border rounded-lg bg-purple-50 dark:bg-purple-900 text-gray-800 dark:text-white col-span-2"
-          />
-          <select
-            value={currency}
-            onChange={(e) => setCurrency(e.target.value)}
-            className="p-3 border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-white"
-          >
-            <option value="INR">INR ₹</option>
-            <option value="USD">USD $</option>
-            <option value="EUR">EUR €</option>
-          </select>
-          <input
-            type="number"
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-            placeholder="Target Amount"
-            className="p-3 border rounded-lg bg-red-50 dark:bg-red-900 text-gray-800 dark:text-white"
-          />
+          {/* Only show these if not in reverse mode */}
+          {!reverseMode && (
+            <>
+              <div className="relative">
+                <input
+                  type="number"
+                  value={principal}
+                  onChange={e => setPrincipal(e.target.value)}
+                  placeholder="Principal"
+                  className="p-3 border rounded-lg w-full"
+                />
+                <button
+                  onClick={() => setPrincipal(1000)}
+                  className="absolute right-2 top-2 text-xs bg-gray-200 px-2 py-1 rounded"
+                  title="Reset"
+                >⟲</button>
+              </div>
+              <input
+                type="number"
+                value={rate}
+                onChange={(e) => setRate(e.target.value)}
+                placeholder="Rate (%)"
+                className="p-3 border rounded-lg bg-green-50 dark:bg-green-900 text-gray-800 dark:text-white"
+              />
+              <input
+                type="number"
+                value={days}
+                onChange={(e) => setDays(e.target.value)}
+                placeholder="Total Days"
+                className="p-3 border rounded-lg bg-yellow-50 dark:bg-yellow-900 text-gray-800 dark:text-white"
+              />
+              <select
+                value={periodDays}
+                onChange={(e) => {
+                  const selectedPeriod = Number(e.target.value);
+                  setPeriodDays(selectedPeriod);
+                  console.log("Updated Period Days:", selectedPeriod); // Debugging
+                }}
+                className="p-3 border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-white"
+              >
+                {periodOptions.map((o) => (
+                  <option key={o.days} value={o.days}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                value={contribution}
+                onChange={(e) => setContribution(e.target.value)}
+                placeholder="Contribution per period"
+                className="p-3 border rounded-lg bg-purple-50 dark:bg-purple-900 text-gray-800 dark:text-white col-span-2"
+              />
+              <select
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+                className="p-3 border rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-white"
+              >
+                <option value="INR">INR ₹</option>
+                <option value="USD">USD $</option>
+                <option value="EUR">EUR €</option>
+              </select>
+              <input
+                type="number"
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                placeholder="Target Amount"
+                className="p-3 border rounded-lg bg-red-50 dark:bg-red-900 text-gray-800 dark:text-white"
+              />
+            </>
+          )}
+          {/* Show these if in reverse mode */}
+          {reverseMode && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <input
+                type="number"
+                value={target}
+                onChange={e => setTarget(e.target.value)}
+                placeholder="Target Amount"
+                className="p-3 border rounded-lg bg-red-50 dark:bg-red-900 text-gray-800 dark:text-white"
+              />
+              <input
+                type="number"
+                value={days}
+                onChange={e => setDays(e.target.value)}
+                placeholder="Total Days"
+                className="p-3 border rounded-lg bg-yellow-50 dark:bg-yellow-900 text-gray-800 dark:text-white"
+              />
+              <input
+                type="number"
+                value={principal}
+                onChange={e => setPrincipal(e.target.value)}
+                placeholder="Principal (leave blank to calculate)"
+                className="p-3 border rounded-lg bg-indigo-50 dark:bg-indigo-900 text-gray-800 dark:text-white"
+              />
+              <input
+                type="number"
+                value={rate}
+                onChange={e => setRate(e.target.value)}
+                placeholder="Rate (%) (leave blank to calculate)"
+                className="p-3 border rounded-lg bg-green-50 dark:bg-green-900 text-gray-800 dark:text-white"
+              />
+            </div>
+          )}
         </div>
+        {inputError && (
+          <div className="text-red-500 text-sm mt-2">{inputError}</div>
+        )}
         <div className="flex flex-wrap gap-4 mt-6">
           <button
             onClick={calculate}
@@ -287,6 +442,81 @@ const CompoundInterestCalculator = () => {
             Reset
           </button>
         </div>
+
+        {/* Principal Slider */}
+        <div className="flex flex-col">
+          <label className="mb-1 text-sm text-gray-700 dark:text-gray-200">Principal: {currency} {principal}</label>
+          <input
+            type="range"
+            min="100"
+            max="100000"
+            step="100"
+            value={principal}
+            onChange={e => setPrincipal(Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+
+        {/* Rate Slider */}
+        <div className="flex flex-col">
+          <label className="mb-1 text-sm text-gray-700 dark:text-gray-200">Rate: {rate}%</label>
+          <input
+            type="range"
+            min="1"
+            max="30"
+            step="0.1"
+            value={rate}
+            onChange={e => setRate(Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+
+        {/* Days Slider */}
+        <div className="flex flex-col">
+          <label className="mb-1 text-sm text-gray-700 dark:text-gray-200">Days: {days}</label>
+          <input
+            type="range"
+            min="1"
+            max="3650"
+            step="1"
+            value={days}
+            onChange={e => setDays(Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 mb-4">
+          <input
+            type="checkbox"
+            checked={reverseMode}
+            onChange={() => setReverseMode(!reverseMode)}
+            id="reverseMode"
+          />
+          <label htmlFor="reverseMode" className="text-gray-700 dark:text-gray-200 text-sm">
+            Reverse Calculation Mode (Find required rate or principal)
+          </label>
+        </div>
+
+        {reverseMode && (
+          <>
+            <button
+              onClick={handleReverseCalculation}
+              className="mt-4 w-full py-3 bg-indigo-500 text-white rounded-lg"
+            >
+              Calculate Required Value
+            </button>
+            {requiredRate && (
+              <div className="mt-2 text-green-700 dark:text-green-400">
+                Required Rate: <strong>{requiredRate}%</strong>
+              </div>
+            )}
+            {requiredPrincipal && (
+              <div className="mt-2 text-green-700 dark:text-green-400">
+                Required Principal: <strong>{currency} {requiredPrincipal}</strong>
+              </div>
+            )}
+          </>
+        )}
 
         {/* Chart Section */}
         <div className="mt-6 bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-2xl shadow-md">
@@ -306,6 +536,37 @@ const CompoundInterestCalculator = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* About Section */}
+      <div className="mb-8 mt-4 bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-2xl shadow-md">
+        <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">About Compound Interest Calculator</h2>
+        <p className="text-gray-700 dark:text-gray-300 mb-2">
+          Compounding interest, as opposed to simple interest, is the situation where your wealth increases exponentially because you earn interest on your total investments, including both your principal and the interest it accrues. This makes compound interest a powerful tool for growing your savings and investments over time.
+        </p>
+        <ul className="list-disc pl-6 text-gray-700 dark:text-gray-300 mb-2">
+          <li>Determine accurate returns over any time frame.</li>
+          <li>Plan your investments by identifying the required corpus for your goals.</li>
+          <li>Customize calculations for different compounding periods (daily, weekly, monthly, yearly).</li>
+          <li>See total and yearly returns, helping you plan for withdrawals or future needs.</li>
+          <li>Stay updated with market-aligned rates and government regulations.</li>
+        </ul>
+        <p className="text-gray-700 dark:text-gray-300 mb-2">
+          <strong>How does it work?</strong> Enter your principal, interest rate, compounding period, and investment duration. The calculator uses the standard formula:
+        </p>
+        <div className="bg-gray-100 dark:bg-gray-900 rounded p-3 mb-2 text-sm text-gray-800 dark:text-gray-200">
+          <strong>A = P (1 + r/n)<sup>nt</sup></strong>
+          <br />
+          Where:<br />
+          <span className="ml-2">A = Final amount</span><br />
+          <span className="ml-2">P = Principal amount</span><br />
+          <span className="ml-2">r = Annual interest rate</span><br />
+          <span className="ml-2">n = Number of times interest is compounded per year</span><br />
+          <span className="ml-2">t = Number of years</span>
+        </div>
+        <p className="text-gray-700 dark:text-gray-300">
+          This calculator is designed for ease of use, reliability, and accuracy. Adjust your parameters and instantly see how your investment grows—making financial planning simple and transparent!
+        </p>
       </div>
 
       {/* Chart Section */}
@@ -442,6 +703,40 @@ const CompoundInterestCalculator = () => {
         )}
       </div>
 
+      {scenarios.length > 0 && (
+        <div className="overflow-x-auto mt-6">
+          <table className="min-w-full bg-white dark:bg-gray-900 rounded shadow text-sm">
+            <thead>
+              <tr>
+                <th className="px-2 py-1">Scenario</th>
+                <th className="px-2 py-1">Principal</th>
+                <th className="px-2 py-1">Rate (%)</th>
+                <th className="px-2 py-1">Days</th>
+                <th className="px-2 py-1">Final Amount</th>
+                <th className="px-2 py-1">Target Day</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scenarios.map((scenario, idx) => {
+                const scenarioData = calculateScenarioData(scenario);
+                const scenarioFinalAmount = scenarioData[scenarioData.length - 1]?.amount || 0;
+                const scenarioTargetDay = scenarioData.find((d) => d.amount >= Number(target))?.day || 'Not Reached';
+                return (
+                  <tr key={idx}>
+                    <td className="px-2 py-1">{idx + 1}</td>
+                    <td className="px-2 py-1">{currencySymbols[currency]} {scenario.principal}</td>
+                    <td className="px-2 py-1">{scenario.rate}</td>
+                    <td className="px-2 py-1">{scenario.days}</td>
+                    <td className="px-2 py-1">{currencySymbols[currency]} {scenarioFinalAmount.toFixed(2)}</td>
+                    <td className="px-2 py-1">{scenarioTargetDay}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Export Section */}
       <div className="flex flex-wrap gap-4 mt-6">
         <button
@@ -462,6 +757,12 @@ const CompoundInterestCalculator = () => {
         >
           Export Excel
         </button>
+        <button
+          onClick={downloadChartImage}
+          className="flex-1 py-2 bg-purple-500 text-white rounded-lg shadow-md hover:bg-purple-600"
+        >
+          Download Chart Image
+        </button>
       </div>
 
       {/* Target Day Display */}
@@ -473,6 +774,18 @@ const CompoundInterestCalculator = () => {
         </div>
       )}
 
+      {/* Progress Bar */}
+      {finalAmount > 0 && target && (
+        <div className="w-full bg-gray-200 rounded-full h-4 mt-4">
+          <div
+            className="bg-indigo-500 h-4 rounded-full progress-animated"
+            style={{
+              width: `${Math.min((finalAmount / Number(target)) * 100, 100)}%`
+            }}
+          ></div>
+        </div>
+      )}
+
       {/* Summary Report Section */}
       <div className="mt-6 bg-white dark:bg-gray-800 p-4 sm:p-6 rounded-2xl shadow-md">
         <h2 className="text-2xl font-semibold text-gray-800 dark:text-white mb-4 text-center sm:text-left">Summary Report</h2>
@@ -481,7 +794,17 @@ const CompoundInterestCalculator = () => {
             <strong>Basic Calculation:</strong> Final Amount: {currency} {finalAmount.toFixed(2)}{' '}
             {currentStep !== null && `| Target Hit on Day: ${currentStep}`}
           </p>
-
+          <p className="mb-2">
+            <strong>Total Interest Earned:</strong> {currency} {interestEarned.toFixed(2)}
+          </p>
+          {doubleDay && (
+            <p className="mb-2">
+              <strong>Estimated Days to Double Investment:</strong> {doubleDay} days
+            </p>
+          )}
+          <p className="mb-2">
+            <strong>Inflation-Adjusted Final Amount:</strong> {currency} {realFinalAmount.toFixed(2)}
+          </p>
           {scenarios.length > 0 && (
             <div>
               <h3 className="text-lg font-bold text-gray-800 dark:text-white mt-4">Scenarios:</h3>
@@ -509,6 +832,70 @@ const CompoundInterestCalculator = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Add a toggle button: */}
+      <button
+        onClick={() => setShowTable(!showTable)}
+        className="mt-4 px-4 py-2 bg-gray-300 dark:bg-gray-700 text-gray-800 dark:text-white rounded-lg"
+      >
+        {showTable ? 'Hide Table' : 'Show Table'}
+      </button>
+
+      {/* Below your chart, show the table if showTable is true: */}
+      {showTable && (
+        <div className="overflow-x-auto mt-4">
+          <table className="min-w-full bg-white dark:bg-gray-900 rounded shadow text-sm">
+            <thead>
+              <tr>
+                <th className="px-2 py-1">Period</th>
+                <th className="px-2 py-1">Day</th>
+                <th className="px-2 py-1">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((row, idx) => (
+                <tr key={idx}>
+                  <td className="px-2 py-1">{idx + 1}</td>
+                  <td className="px-2 py-1">{row.day}</td>
+                  <td className="px-2 py-1">{currency} {row.amount.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-4">
+        <button
+          onClick={() => setShowInfo(!showInfo)}
+          className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-white rounded-lg"
+        >
+          {showInfo ? 'Hide Growth Breakdown' : 'Show Growth Breakdown'}
+        </button>
+        {showInfo && (
+          <div className="mt-2 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg shadow text-sm">
+            <div><strong>Total Principal:</strong> {currency} {Number(principal).toFixed(2)}</div>
+            <div><strong>Total Contributions:</strong> {currency} {(Math.floor(Number(days) / periodDays) * Number(contribution)).toFixed(2)}</div>
+            <div><strong>Total Interest Earned:</strong> {currency} {interestEarned.toFixed(2)}</div>
+            <div><strong>Final Amount:</strong> {currency} {finalAmount.toFixed(2)}</div>
+          </div>
+        )}
+      </div>
+      {showGoal && (
+        <div className="fixed top-8 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 transition">
+          🎉 Congratulations! Your investment target will be reached on day {currentStep}.
+        </div>
+      )}
+      <div className="flex flex-col">
+        <label className="mb-1 text-sm text-gray-700 dark:text-gray-200">Inflation Rate (%)</label>
+        <input
+          type="number"
+          value={inflation}
+          onChange={e => setInflation(Number(e.target.value))}
+          placeholder="e.g. 6"
+          className="p-3 border rounded-lg bg-orange-50 dark:bg-orange-900 text-gray-800 dark:text-white"
+        />
       </div>
     </div>
   );
