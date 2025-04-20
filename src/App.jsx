@@ -24,8 +24,17 @@ function App() {
       </main>
 
       <footer className="bg-gray-200 dark:bg-gray-800 text-center p-4 text-sm text-gray-700 dark:text-gray-300">
-        © 2025 Compound Interest Calculator. All rights reserved.
+        © 2025 Anuj52 — All rights reserved. |
+        <a
+          href="https://github.com/Anuj52"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 dark:text-blue-400 hover:underline ml-1"
+        >
+          GitHub
+        </a>
       </footer>
+
     </div>
   );
 }
